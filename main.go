@@ -1,8 +1,13 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"io"
@@ -21,6 +26,9 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+const passwordFilePath = "passwords.json" // File path for storing passwords
+const encryptionKey = "a16byteslongkey!"  // Must be 16, 24, or 32 bytes long
 
 // ---------------------------------------------------------------------
 //  1) Windows Directories
@@ -141,6 +149,8 @@ type FileScanner struct {
 	scPageLabel   *widget.Label
 	scPrevBtn     *widget.Button
 	scNextBtn     *widget.Button
+
+	passwordManagerRoot fyne.CanvasObject
 }
 
 // ---------------------------------------------------------------------
@@ -166,16 +176,21 @@ func main() {
 		scPageSize: 20,
 	}
 
+	// Initialize left menu and individual tabs
 	scanner.leftNav = scanner.makeLeftMenu()
 	scanner.duplicateFinderRoot = scanner.setupDuplicateFinderUI()
 	scanner.spaceCleanerRoot = scanner.setupSpaceCleanerUI()
 	scanner.historyRoot = scanner.setupHistoryUI()
+	scanner.passwordManagerRoot = scanner.setupPasswordManagerUI() // Initialize the Password Manager
 
+	// Set the default right UI
 	scanner.rightUI = scanner.duplicateFinderRoot
 
+	// Configure the split layout
 	scanner.split = container.NewHSplit(scanner.leftNav, scanner.rightUI)
 	scanner.split.Offset = 0.2
 
+	// Set the content and start the app
 	w.SetContent(scanner.split)
 	w.ShowAndRun()
 }
@@ -185,6 +200,7 @@ func main() {
 // ---------------------------------------------------------------------
 
 func (s *FileScanner) makeLeftMenu() fyne.CanvasObject {
+
 	dupBtn := widget.NewButton("Duplicate Finder", func() {
 		s.switchRightContent(s.duplicateFinderRoot)
 	})
@@ -194,11 +210,15 @@ func (s *FileScanner) makeLeftMenu() fyne.CanvasObject {
 	historyBtn := widget.NewButton("Deletion History", func() {
 		s.switchRightContent(s.historyRoot)
 	})
+	passwordManagerBtn := widget.NewButton("Password Manager", func() {
+		s.switchRightContent(s.passwordManagerRoot)
+	})
 
 	return container.NewVBox(
 		dupBtn,
 		spaceCleanerBtn,
 		historyBtn,
+		passwordManagerBtn, // Add the Password Manager button here
 		layout.NewSpacer(),
 	)
 }
@@ -906,6 +926,62 @@ func (s *FileScanner) showScanningDuplicates(dirPath, extFilter string) {
 	}()
 }
 
+func loadPasswords() map[string]string {
+	file, err := os.Open(passwordFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]string)
+		}
+		fmt.Println("Error opening file:", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	encryptedPasswords := make(map[string]string)
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&encryptedPasswords); err != nil {
+		fmt.Println("Error decoding JSON:", err)
+		os.Exit(1)
+	}
+
+	passwords := make(map[string]string)
+	for website, encrypted := range encryptedPasswords {
+		decrypted, err := decrypt(encrypted)
+		if err != nil {
+			fmt.Println("Error decrypting password for", website, ":", err)
+			os.Exit(1)
+		}
+		passwords[website] = decrypted
+	}
+
+	return passwords
+}
+
+func savePasswords(passwords map[string]string) {
+	encryptedPasswords := make(map[string]string)
+	for website, password := range passwords {
+		encrypted, err := encrypt(password)
+		if err != nil {
+			fmt.Println("Error encrypting password for", website, ":", err)
+			os.Exit(1)
+		}
+		encryptedPasswords[website] = encrypted
+	}
+
+	file, err := os.Create(passwordFilePath)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(&encryptedPasswords); err != nil {
+		fmt.Println("Error encoding JSON:", err)
+		os.Exit(1)
+	}
+}
+
 func (s *FileScanner) showScanningLargeFiles(dirs []string, containerToFill *fyne.Container) {
 	pb := widget.NewProgressBarInfinite()
 	lbl := widget.NewLabel("Scanning for large files...")
@@ -944,6 +1020,55 @@ func (s *FileScanner) showScanningLargeFiles(dirs []string, containerToFill *fyn
 		s.scCurrentPage = 0
 		s.refreshLargeFiles(containerToFill)
 	}()
+}
+
+func encrypt(plaintext string) (string, error) {
+	block, err := aes.NewCipher([]byte(encryptionKey))
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, 12)
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	ciphertext := aesgcm.Seal(nil, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(append(nonce, ciphertext...)), nil
+}
+
+func decrypt(encryptedText string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encryptedText)
+	if err != nil {
+		return "", err
+	}
+
+	block, err := aes.NewCipher([]byte(encryptionKey))
+	if err != nil {
+		return "", err
+	}
+
+	if len(data) < 12 {
+		return "", fmt.Errorf("invalid ciphertext")
+	}
+
+	nonce, ciphertext := data[:12], data[12:]
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
 }
 
 func (s *FileScanner) scanDirectory(dirPath, extFilter string) ([]string, error) {
@@ -1043,4 +1168,95 @@ func (s *FileScanner) summarize(d map[string][]string) (int, int64) {
 		}
 	}
 	return c, sz
+}
+
+func (s *FileScanner) setupPasswordManagerUI() fyne.CanvasObject {
+	passwords := loadPasswords()
+
+	passwordList := widget.NewList(
+		func() int {
+			return len(passwords)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("")
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			index := 0
+			for website := range passwords {
+				if index == id {
+					obj.(*widget.Label).SetText(website)
+					return
+				}
+				index++
+			}
+		},
+	)
+
+	addPasswordBtn := widget.NewButton("Add Password", func() {
+		websiteEntry := widget.NewEntry()
+		passwordEntry := widget.NewPasswordEntry()
+
+		dialog.ShowForm("Add Password", "Save", "Cancel", []*widget.FormItem{
+			widget.NewFormItem("Website", websiteEntry),
+			widget.NewFormItem("Password", passwordEntry),
+		}, func(confirm bool) {
+			if confirm {
+				website := strings.TrimSpace(websiteEntry.Text)
+				password := strings.TrimSpace(passwordEntry.Text)
+
+				if website == "" || password == "" {
+					dialog.ShowInformation("Invalid Input", "Website and Password cannot be empty.", s.mainWindow)
+					return
+				}
+
+				// Add to passwords map
+				passwords[website] = password
+
+				// Save to JSON file
+				savePasswords(passwords)
+
+				// Refresh password list
+				passwordList.Refresh()
+
+				dialog.ShowInformation("Success", "Password added successfully.", s.mainWindow)
+			}
+		}, s.mainWindow)
+	})
+
+	removePasswordBtn := widget.NewButton("Remove Password", func() {
+		dialog.ShowEntryDialog("Remove Password", "Enter website to remove:", func(website string) {
+			if _, exists := passwords[website]; exists {
+				delete(passwords, website)
+				savePasswords(passwords)
+				passwordList.Refresh()
+			} else {
+				dialog.ShowInformation("Not Found", "No password found for "+website, s.mainWindow)
+			}
+		}, s.mainWindow)
+	})
+
+	viewPasswordBtn := widget.NewButton("View Password", func() {
+		dialog.ShowEntryDialog("View Password", "Enter website to view:", func(website string) {
+			if password, exists := passwords[website]; exists {
+				dialog.ShowInformation("Password", fmt.Sprintf("Password for %s: %s", website, password), s.mainWindow)
+			} else {
+				dialog.ShowInformation("Not Found", "No password found for "+website, s.mainWindow)
+			}
+		}, s.mainWindow)
+	})
+
+	controls := container.NewHBox(
+		addPasswordBtn,
+		removePasswordBtn,
+		viewPasswordBtn,
+		layout.NewSpacer(),
+	)
+
+	return container.NewBorder(
+		controls,
+		nil,
+		nil,
+		nil,
+		passwordList,
+	)
 }
