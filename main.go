@@ -25,6 +25,11 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/kbinani/screenshot"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/host"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 const passwordFilePath = "passwords.json" // File path for storing passwords
@@ -151,6 +156,8 @@ type FileScanner struct {
 	scNextBtn     *widget.Button
 
 	passwordManagerRoot fyne.CanvasObject
+
+	systemInfoRoot fyne.CanvasObject
 }
 
 // ---------------------------------------------------------------------
@@ -181,7 +188,8 @@ func main() {
 	scanner.duplicateFinderRoot = scanner.setupDuplicateFinderUI()
 	scanner.spaceCleanerRoot = scanner.setupSpaceCleanerUI()
 	scanner.historyRoot = scanner.setupHistoryUI()
-	scanner.passwordManagerRoot = scanner.setupPasswordManagerUI() // Initialize the Password Manager
+	scanner.passwordManagerRoot = scanner.setupPasswordManagerUI() // Password Manager
+	scanner.systemInfoRoot = scanner.setupSystemInfoUI()           // System Info
 
 	// Set the default right UI
 	scanner.rightUI = scanner.duplicateFinderRoot
@@ -200,7 +208,6 @@ func main() {
 // ---------------------------------------------------------------------
 
 func (s *FileScanner) makeLeftMenu() fyne.CanvasObject {
-
 	dupBtn := widget.NewButton("Duplicate Finder", func() {
 		s.switchRightContent(s.duplicateFinderRoot)
 	})
@@ -213,12 +220,16 @@ func (s *FileScanner) makeLeftMenu() fyne.CanvasObject {
 	passwordManagerBtn := widget.NewButton("Password Manager", func() {
 		s.switchRightContent(s.passwordManagerRoot)
 	})
+	systemInfoBtn := widget.NewButton("System Info", func() {
+		s.switchRightContent(s.systemInfoRoot)
+	})
 
 	return container.NewVBox(
 		dupBtn,
 		spaceCleanerBtn,
 		historyBtn,
-		passwordManagerBtn, // Add the Password Manager button here
+		passwordManagerBtn,
+		systemInfoBtn,
 		layout.NewSpacer(),
 	)
 }
@@ -1259,4 +1270,51 @@ func (s *FileScanner) setupPasswordManagerUI() fyne.CanvasObject {
 		nil,
 		passwordList,
 	)
+}
+
+func (s *FileScanner) setupSystemInfoUI() fyne.CanvasObject {
+	// Fetch CPU information
+	cpuInfo, _ := cpu.Info()
+	cpuDetails := "=== CPU Info ===\n"
+	for _, cpu := range cpuInfo {
+		cpuDetails += fmt.Sprintf("Model: %s\nCores: %d\nSpeed: %.2f GHz\n\n",
+			cpu.ModelName, cpu.Cores, cpu.Mhz/1000)
+	}
+
+	// Fetch memory information
+	memInfo, _ := mem.VirtualMemory()
+	memDetails := fmt.Sprintf("=== Memory Info ===\nTotal Memory: %.2f GB\nUsed Memory: %.2f GB\nFree Memory: %.2f GB\n\n",
+		float64(memInfo.Total)/1e9, float64(memInfo.Used)/1e9, float64(memInfo.Free)/1e9)
+
+	// Fetch disk usage
+	diskInfo, _ := disk.Usage("/")
+	diskDetails := fmt.Sprintf("=== Disk Info ===\nTotal Disk Space: %.2f GB\nUsed Disk Space: %.2f GB\nFree Disk Space: %.2f GB\n\n",
+		float64(diskInfo.Total)/1e9, float64(diskInfo.Used)/1e9, float64(diskInfo.Free)/1e9)
+
+	// Fetch host information
+	hostInfo, _ := host.Info()
+	hostDetails := fmt.Sprintf("=== Host Info ===\nHostname: %s\nOS: %s %s\nUptime: %d seconds\n\n",
+		hostInfo.Hostname, hostInfo.Platform, hostInfo.PlatformVersion, hostInfo.Uptime)
+
+	// Fetch monitor information
+	numDisplays := screenshot.NumActiveDisplays()
+	monitorDetails := "=== Monitor Specifications ===\n"
+	if numDisplays == 0 {
+		monitorDetails += "No monitors detected.\n"
+	} else {
+		for i := 0; i < numDisplays; i++ {
+			bounds := screenshot.GetDisplayBounds(i)
+			monitorDetails += fmt.Sprintf(
+				"Monitor %d:\n  Resolution: %dx%d\n  Position: x=%d, y=%d\n\n",
+				i+1, bounds.Dx(), bounds.Dy(), bounds.Min.X, bounds.Min.Y,
+			)
+		}
+	}
+
+	// Combine all information into a single string
+	systemInfo := fmt.Sprintf("%s\n%s\n%s\n%s\n%s",
+		cpuDetails, memDetails, diskDetails, hostDetails, monitorDetails)
+
+	// Display all information in a scrollable text widget
+	return container.NewScroll(widget.NewLabel(systemInfo))
 }
