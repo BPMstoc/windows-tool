@@ -41,14 +41,14 @@ A powerful desktop application that provides tools to optimize Windows systems, 
 ### Prerequisites
 - [Go](https://go.dev/) installed (1.18 or higher recommended).
 - Ensure you have downloaded the entire project folder, which contains:
-  - The precompiled executable file `OPTIMIZER.exe`
   - Supporting files such as `passwords.json`
 
 ### Steps
 1. **Download the Folder**:
    - Download the entire folder from the [GitHub Repository](https://github.com/BPMstoc/windows-tool).
 2. **Run the Application**:
-   - Navigate to the folder and double-click `OPTIMIZER.exe`.
+   - Go to the [Releases Page](https://github.com/BPMstoc/windows-tool/releases/tag/EXE).
+   - Download the `OPTIMIZER.exe` file from the assets section.
 3. **Start Using**
 
 
